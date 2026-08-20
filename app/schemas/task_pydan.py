@@ -58,3 +58,11 @@ class TaskUpdateModel(BaseModel):
     priority: TaskPriority | None = None
     assignee_id: int | None = None
     deadline: datetime | None = None
+
+
+class TaskStatsResponse(BaseModel):
+    total_tasks: int
+    by_status: dict[str, int]
+    by_priority: dict[str, int]
+    overdue_tasks: int
+    active_tasks: int

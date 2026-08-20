@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task_mod import TaskPriority, TaskStatus, TaskTable
 from sqlalchemy import case, func, or_, select, update, delete
@@ -140,4 +142,87 @@ async def delete_task_from_db(task_id: int, session: AsyncSession) -> None:
     except:
         await session.rollback()
         raise
+
+
+async def get_overdue_tasks_from_db(date_now: datetime,
+                                    session: AsyncSession):
+    stmt = (
+        select(TaskTable)
+        .where(
+            TaskTable.deadline < date_now,
+            TaskTable.status.not_in([TaskStatus.DONE.value, TaskStatus.CANCELLED.value])
+        )
+        .order_by(TaskTable.deadline.asc())
+    )
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_stats_from_db(date_now: datetime,
+                             session: AsyncSession):
     
+    total_stmt = select(func.count(TaskTable.id))
+    total_res = await session.execute(total_stmt)
+    total_tasks = total_res.scalar_one()
+
+
+    status_stmt = select(TaskTable.status, func.count(TaskTable.id)).group_by(TaskTable.status)
+    status_res = await session.execute(status_stmt)
+    by_status = {status.value: 0 for status in TaskStatus}
+    for status_name, count in status_res.all():
+        by_status[status_name] = count
+
+    
+    priority_stmt = select(TaskTable.priority, func.count(TaskTable.id)).group_by(TaskTable.priority)
+    priority_res = await session.execute(priority_stmt)
+    by_priority = {priority.value: 0 for priority in TaskPriority}
+    for priority_name, count in priority_res.all():
+        by_priority[priority_name] = count
+
+    
+    overdue_stmt = (
+        select(func.count(TaskTable.id))
+        .where(
+            TaskTable.deadline < date_now,
+            TaskTable.status.not_in([TaskStatus.DONE.value, TaskStatus.CANCELLED.value])
+        )
+    )
+    overdue_res = await session.execute(overdue_stmt)
+    overdue_tasks = overdue_res.scalar_one()
+
+    
+    active_statuses = [TaskStatus.BACKLOG.value, TaskStatus.IN_PROGRESS.value, TaskStatus.REVIEW.value]
+    active_stmt = (
+        select(func.count(TaskTable.id))
+        .where(TaskTable.status.in_(active_statuses))
+    )
+    active_res = await session.execute(active_stmt)
+    active_tasks = active_res.scalar_one()
+
+    
+    return {
+        "total_tasks": total_tasks,
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "overdue_tasks": overdue_tasks,
+        "active_tasks": active_tasks
+    }
+
+
+async def auto_cancel_overdue_tasks_in_db(date_now: datetime,
+                                          session: AsyncSession) -> int:
+    stmt = (
+        update(TaskTable)
+        .where(
+            TaskTable.deadline < date_now,
+            TaskTable.status.not_in([TaskStatus.DONE.value, TaskStatus.CANCELLED.value])
+        )
+        .values(status=TaskStatus.CANCELLED.value)
+    )
+    result = await session.execute(stmt)
+    try:
+        await session.commit()
+        return result.rowcount
+    except:
+        await session.rollback()
+        raise

@@ -2,12 +2,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, TaskNotFoundError, TooManyTasksError
 from app.models.task_mod import TaskStatus
-from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskUpdateModel
+from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from app.schemas.user_pydan import UserJWTData
 from app.api.deps import allowed_client, get_session
-from app.services.task_serv import prepare_to_add_task, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_tasks
+from app.services.task_serv import prepare_to_add_task, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_overdue_tasks, prepare_to_get_tasks
 
 router= APIRouter()
+
+
 
 
 @router.post('/tasks', response_model=TaskDBResponse, status_code=status.HTTP_201_CREATED)
@@ -42,6 +44,31 @@ async def get_tasks(task_filters: TaskFilter = Depends(),
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
 
     return cur_tasks
+
+
+@router.get('/tasks/overdue', response_model=list[TaskDBResponse])
+async def get_overdue_tasks(
+    user_data: UserJWTData = Depends(allowed_client),
+    session: AsyncSession = Depends(get_session)
+):
+    try:
+        cur_overdues = await prepare_to_get_overdue_tasks(session=session)
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+
+    return cur_overdues
+
+
+@router.get('/tasks/stats', response_model=TaskStatsResponse)
+async def get_stats(user_data: UserJWTData = Depends(allowed_client),
+                    session: AsyncSession = Depends(get_session)):
+    try:
+        cur_stats: TaskStatsResponse = await prepare_to_get_stats(session=session)
+    except:
+        pass
+
+    return cur_stats
 
 
 @router.get('/tasks/{task_id}', response_model=TaskDetailResponse)

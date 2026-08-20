@@ -2,10 +2,10 @@ from datetime import datetime, timezone
 
 from app.core.exceptions import CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, TaskNotFoundError, TooManyTasksError
 from app.crud.com_crud import get_comments_by_task_id_from_db
-from app.crud.task_crud import add_task_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
+from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
 from app.models.task_mod import CommentTable, TaskStatus, TaskTable
 from app.schemas.comment_pydan import CommentResponse
-from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskUpdateModel
+from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -158,3 +158,25 @@ async def prepare_to_get_cur_task(task_id: int,
     task_dict['comments'] = [CommentResponse.model_validate(item) for item in cur_comments]
 
     return TaskDetailResponse(**task_dict)
+
+
+async def prepare_to_get_overdue_tasks(session: AsyncSession):
+    date_now = datetime.now(timezone.utc)
+
+    cur_overdues: list[TaskTable] = await get_overdue_tasks_from_db(date_now=date_now,
+                                                                    session=session)
+
+    return [TaskDBResponse.model_validate(item) for item in cur_overdues]
+
+
+async def prepare_to_get_stats(session: AsyncSession):
+    cur_stats: dict = await get_stats_from_db(date_now=datetime.now(timezone.utc),
+                                              session=session)
+
+    return TaskStatsResponse.model_validate(cur_stats)
+
+
+async def prepare_to_auto_cancel_overdue_tasks(session: AsyncSession) -> int:
+    result: int = await auto_cancel_overdue_tasks_in_db(date_now=datetime.now(timezone.utc),
+                                                 session=session)
+    return result
