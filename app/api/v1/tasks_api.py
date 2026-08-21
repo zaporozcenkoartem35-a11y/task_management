@@ -1,15 +1,15 @@
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
+from datetime import datetime, timezone
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
+from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, ExportTaskNotFoundError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.models.task_mod import TaskStatus
 from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from app.schemas.user_pydan import UserJWTData
 from app.api.deps import allowed_client, get_session
-from app.services.task_serv import prepare_to_add_task, prepare_to_bulk_import, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_overdue_tasks, prepare_to_get_stats, prepare_to_get_tasks
+from app.services.task_serv import generate_tasks_csv_file, prepare_to_add_task, prepare_to_bulk_import, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_download_export_file, prepare_to_export_task, prepare_to_get_cur_task, prepare_to_get_export_status, prepare_to_get_overdue_tasks, prepare_to_get_stats, prepare_to_get_tasks
 
-router= APIRouter()
-
-
+router = APIRouter()
 
 
 @router.post('/tasks', response_model=TaskDBResponse, status_code=status.HTTP_201_CREATED)
@@ -32,12 +32,11 @@ async def add_task(task_data: TaskCreateModel,
 
 
 @router.get('/tasks', response_model=list[TaskDBResponse])
-async def get_tasks(task_filters: TaskFilter = Depends(),
+async def get_tasks(filter_data: TaskFilter = Depends(),
                     user_data: UserJWTData = Depends(allowed_client),
                     session: AsyncSession = Depends(get_session)):
     try:
-        cur_tasks: list[TaskDBResponse] = await prepare_to_get_tasks(task_filters=task_filters,
-                                                                     user_id=user_data.id,
+        cur_tasks: list[TaskDBResponse] = await prepare_to_get_tasks(filter_data=filter_data,
                                                                      session=session)
     except Exception as e:
         print(e)
@@ -47,12 +46,11 @@ async def get_tasks(task_filters: TaskFilter = Depends(),
 
 
 @router.get('/tasks/overdue', response_model=list[TaskDBResponse])
-async def get_overdue_tasks(
-    user_data: UserJWTData = Depends(allowed_client),
-    session: AsyncSession = Depends(get_session)
-):
+async def get_overdue_tasks(user_data: UserJWTData = Depends(allowed_client),
+                            session: AsyncSession = Depends(get_session)):
     try:
-        cur_overdues = await prepare_to_get_overdue_tasks(session=session)
+        cur_overdues: list[TaskDBResponse] = await prepare_to_get_overdue_tasks(date_now=datetime.now(timezone.utc),
+                                                                                session=session)
     except Exception as e:
         print(e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
@@ -65,8 +63,9 @@ async def get_stats(user_data: UserJWTData = Depends(allowed_client),
                     session: AsyncSession = Depends(get_session)):
     try:
         cur_stats: TaskStatsResponse = await prepare_to_get_stats(session=session)
-    except:
-        pass
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
 
     return cur_stats
 
@@ -185,4 +184,46 @@ async def delete_task(task_id: int,
     return {'status': 'success'}
 
 
+@router.post('/tasks/export', status_code=status.HTTP_202_ACCEPTED)
+async def export_tasks(background_tasks: BackgroundTasks,
+                       user_data: UserJWTData = Depends(allowed_client)):
+    try:
+        export_task_id: str = await prepare_to_export_task(background_tasks=background_tasks,
+                                                    user_id=user_data.id)
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+    
+        
+    return {"task_id": export_task_id}
 
+
+@router.get('/tasks/export/{task_id}')
+async def get_export_status(task_id: str,
+                            user_data: UserJWTData = Depends(allowed_client)):
+    try:
+        status_data: dict = await prepare_to_get_export_status(task_id=task_id)
+    except ExportTaskNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Export task not found')
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+    return status_data
+
+
+@router.get('/tasks/export/{task_id}/download')
+async def download_exported_tasks(task_id: str,
+                                  user_data: UserJWTData = Depends(allowed_client)):
+    try:
+        file_path: str = await prepare_to_download_export_file(task_id=task_id)
+    except ExportTaskNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Export file not found or expired')
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+
+    return FileResponse(
+        path=file_path,
+        filename=f"tasks_export_{task_id}.csv",
+        media_type="text/csv"
+    )

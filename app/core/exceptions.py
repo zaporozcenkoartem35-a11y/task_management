@@ -41,3 +41,6 @@ class CSVInvalidFormatError(Exception):
 
 class CSVEmptyError(Exception):
     pass
+
+class ExportTaskNotFoundError(Exception):
+    pass

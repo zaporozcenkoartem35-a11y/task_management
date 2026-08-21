@@ -246,3 +246,14 @@ async def bulk_create_tasks_in_db(task_data: list[dict],
     except:
         await session.rollback()
         raise
+
+
+async def get_all_user_tasks_for_export(user_id: int,
+                                        session: AsyncSession):
+    query = (
+        select(TaskTable)
+        .where(TaskTable.author_id == user_id)
+        .order_by(TaskTable.created_at.desc())
+    )
+    result = await session.execute(query)
+    return result.scalars().all()
