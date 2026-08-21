@@ -1,0 +1,6 @@
+title,description,priority,deadline
+Refactor authentication module,Migrate to Argon2 password hashing,High,2026-08-25T12:00:00Z
+Implement Redis rate limiter,Protect comments endpoint against spam,High,2026-08-26T15:30:00Z
+Integrate ZenQuotes API,Add motivational quote comment on task completion,Medium,2026-08-27T18:00:00Z
+Setup Celery Task Queue,Async export and background jobs,Medium,2026-08-28T10:00:00Z
+Write integration tests,Ensure 100% test coverage for round 2,Low,2026-08-29T20:00:00Z

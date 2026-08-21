@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task_mod import TaskPriority, TaskStatus, TaskTable
-from sqlalchemy import case, func, or_, select, update, delete
+from sqlalchemy import case, func, or_, select, update, delete, insert
 
 from app.schemas.task_pydan import TaskFilter, TaskSortBy
 
@@ -220,6 +220,26 @@ async def auto_cancel_overdue_tasks_in_db(date_now: datetime,
         .values(status=TaskStatus.CANCELLED.value)
     )
     result = await session.execute(stmt)
+    try:
+        await session.commit()
+        return result.rowcount
+    except:
+        await session.rollback()
+        raise
+
+
+async def bulk_create_tasks_in_db(task_data: list[dict],
+                                  session: AsyncSession):
+    if not task_data:
+        return 0
+
+    stmt = (
+        insert(TaskTable)
+        .values(task_data)
+    )
+
+    result = await session.execute(stmt)
+
     try:
         await session.commit()
         return result.rowcount

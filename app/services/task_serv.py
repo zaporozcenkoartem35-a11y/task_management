@@ -1,9 +1,13 @@
+import csv
 from datetime import datetime, timezone
+import io
 
-from app.core.exceptions import CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, TaskNotFoundError, TooManyTasksError
+from fastapi import UploadFile
+
+from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.crud.com_crud import get_comments_by_task_id_from_db
-from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
-from app.models.task_mod import CommentTable, TaskStatus, TaskTable
+from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, bulk_create_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
+from app.models.task_mod import CommentTable, TaskPriority, TaskStatus, TaskTable
 from app.schemas.comment_pydan import CommentResponse
 from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -180,3 +184,51 @@ async def prepare_to_auto_cancel_overdue_tasks(session: AsyncSession) -> int:
     result: int = await auto_cancel_overdue_tasks_in_db(date_now=datetime.now(timezone.utc),
                                                  session=session)
     return result
+
+
+async def prepare_to_bulk_import(file_data: UploadFile,
+                                 user_id: int,
+                                 session: AsyncSession):
+    if not file_data.filename.endswith('.csv'):
+        raise NotCSVError
+
+    content = await file_data.read()
+    try:
+        csv_text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CSVInvalidFormatError
+    
+    reader = csv.DictReader(io.StringIO(csv_text))
+    tasks_data = []
+
+    for row in reader:
+        title = row.get("title", "").strip()
+        raw_deadline = row.get("deadline", "").strip()
+        if not title or not raw_deadline:
+            raise CSVInvalidFormatError
+        try:
+            deadline_dt = datetime.fromisoformat(raw_deadline)
+        except (ValueError, TypeError):
+            raise CSVInvalidFormatError()
+        priority = row.get("priority", TaskPriority.MEDIUM.value).strip()
+        if priority not in [p.value for p in TaskPriority]:
+            priority = TaskPriority.MEDIUM.value
+        tasks_data.append({
+            "title": title,
+            "description": row.get("description", "").strip() or None,
+            "status": TaskStatus.BACKLOG.value,
+            "priority": priority,
+            "author_id": user_id,
+            "assignee_id": None,
+            "deadline": deadline_dt
+        })
+
+    if not tasks_data:
+        raise CSVEmptyError
+    
+    count_tasks: int = await bulk_create_tasks_in_db(task_data=tasks_data,
+                                                    session=session)
+    if not count_tasks:
+        raise CSVEmptyError
+
+    return count_tasks

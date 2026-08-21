@@ -32,3 +32,12 @@ class CannotChangeAssigneeInReviewError(Exception):
 
 class CannotDeleteActiveTaskError(Exception):
     pass
+
+class NotCSVError(Exception):
+    pass
+
+class CSVInvalidFormatError(Exception):
+    pass
+
+class CSVEmptyError(Exception):
+    pass
