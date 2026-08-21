@@ -1,15 +1,13 @@
 import csv
 from datetime import datetime, timezone
 import io
-import json
 import os
-import uuid
-from app.db.session import async_session_maker
-from fastapi import BackgroundTasks, UploadFile
-from app.core.redis import redis_client
-from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, ExportTaskNotFoundError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
+
+from fastapi import UploadFile
+
+from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.crud.com_crud import get_comments_by_task_id_from_db
-from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, bulk_create_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_all_user_tasks_for_export, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
+from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, bulk_create_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
 from app.crud.user_crud import get_system_user_id
 from app.models.task_mod import CommentTable, TaskPriority, TaskStatus, TaskTable
 from app.schemas.comment_pydan import CommentCreateModel, CommentResponse
@@ -251,112 +249,3 @@ async def prepare_to_bulk_import(file_data: UploadFile,
         raise CSVEmptyError
 
     return count_tasks
-
-
-async def generate_tasks_csv_file(user_id: int,
-                                   task_id: str,
-                                   session: AsyncSession) -> str:
-    os.makedirs("exports", exist_ok=True)
-    file_path = f"exports/export_{user_id}_{task_id}.csv"
-
-    tasks = await get_all_user_tasks_for_export(user_id=user_id,
-                                               session=session)
-
-    with open(file_path, mode="w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow([
-            "id", "title", "description", "status", "priority", "deadline", "created_at"
-        ])
-        for t in tasks:
-            writer.writerow([
-                t.id,
-                t.title,
-                t.description or "",
-                t.status,
-                t.priority,
-                t.deadline.isoformat() if t.deadline else "",
-                t.created_at.isoformat() if t.created_at else ""
-            ])
-    return file_path
-
-
-async def process_export_tasks_background(task_id: str, user_id: int):
-    async with async_session_maker() as session:
-        file_path = await generate_tasks_csv_file(
-            user_id=user_id,
-            task_id=task_id,
-            session=session
-        )
-    
-
-    await redis_client.set(
-        f"export:{task_id}",
-        json.dumps({
-            "status": "Done",
-            "file_path": file_path,
-            "download_url": f"/api/v1/tasks/export/{task_id}/download"
-        }),
-        ex=86400
-    )
-
-
-async def prepare_to_export_task(background_tasks: BackgroundTasks,
-                                 user_id: int):
-
-    export_task_id = str(uuid.uuid4())
-
-    await redis_client.set(
-        f"export:{export_task_id}",
-        json.dumps({"status": "Processing"}),
-        ex=86400
-    )
-
-    background_tasks.add_task(
-        process_export_tasks_background,
-        task_id=export_task_id,
-        user_id=user_id
-    )
-
-    return export_task_id
-
-
-async def prepare_to_get_export_status(task_id: str) -> dict:
-    raw_data = await redis_client.get(f"export:{task_id}")
-    if not raw_data:
-        raise ExportTaskNotFoundError
-    
-    task_info = json.loads(raw_data)
-
-    if task_info.get("status") == "Processing":
-        return {
-            "task_id": task_id,
-            "status": "Processing"
-        }
-    elif task_info.get("status") == "Done":
-        return {
-            "task_id": task_id,
-            "status": "Done",
-            "download_url": task_info.get("download_url")
-        }
-    else:
-        return {
-            "task_id": task_id,
-            "status": task_info.get("status", "Failed"),
-            "error": task_info.get("error")
-        }
-
-
-async def prepare_to_download_export_file(task_id: str):
-    raw_data = await redis_client.get(f"export:{task_id}")
-    if not raw_data:
-        raise ExportTaskNotFoundError
-
-    task_info = json.loads(raw_data)
-    if task_info.get("status") != 'Done':
-        raise ExportTaskNotFoundError
-    
-    file_path = task_info.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        raise ExportTaskNotFoundError
-    
-    return file_path

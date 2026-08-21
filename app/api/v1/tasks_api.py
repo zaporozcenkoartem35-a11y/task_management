@@ -1,13 +1,17 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, UploadFile, status
+import os
+from celery.result import AsyncResult
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, ExportTaskNotFoundError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
+from app.core.celery_app import celery_app
+from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.models.task_mod import TaskStatus
 from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from app.schemas.user_pydan import UserJWTData
 from app.api.deps import allowed_client, get_session
-from app.services.task_serv import generate_tasks_csv_file, prepare_to_add_task, prepare_to_bulk_import, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_download_export_file, prepare_to_export_task, prepare_to_get_cur_task, prepare_to_get_export_status, prepare_to_get_overdue_tasks, prepare_to_get_stats, prepare_to_get_tasks
+from app.services.task_serv import prepare_to_add_task, prepare_to_bulk_import, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_overdue_tasks, prepare_to_get_stats, prepare_to_get_tasks
+from app.tasks.celery_tasks import export_user_tasks_to_csv_task
 
 router = APIRouter()
 
@@ -185,42 +189,46 @@ async def delete_task(task_id: int,
 
 
 @router.post('/tasks/export', status_code=status.HTTP_202_ACCEPTED)
-async def export_tasks(background_tasks: BackgroundTasks,
-                       user_data: UserJWTData = Depends(allowed_client)):
-    try:
-        export_task_id: str = await prepare_to_export_task(background_tasks=background_tasks,
-                                                    user_id=user_data.id)
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
-    
-        
-    return {"task_id": export_task_id}
+async def export_tasks(user_data: UserJWTData = Depends(allowed_client)):
+    task = export_user_tasks_to_csv_task.delay(user_id=user_data.id)
+    return {"task_id": task.id}
 
 
 @router.get('/tasks/export/{task_id}')
 async def get_export_status(task_id: str,
                             user_data: UserJWTData = Depends(allowed_client)):
-    try:
-        status_data: dict = await prepare_to_get_export_status(task_id=task_id)
-    except ExportTaskNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Export task not found')
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
-    return status_data
+    task_result = AsyncResult(task_id, app=celery_app)
+
+    if task_result.state in ["PENDING", "STARTED"]:
+        return {
+            "task_id": task_id,
+            "status": "Processing"
+        }
+    elif task_result.state == "SUCCESS":
+        result_data = task_result.result or {}
+        return {
+            "task_id": task_id,
+            "status": "Done",
+            "download_url": result_data.get("download_url")
+        }
+    else:
+        return {
+            "task_id": task_id,
+            "status": "Failed"
+        }
 
 
 @router.get('/tasks/export/{task_id}/download')
 async def download_exported_tasks(task_id: str,
                                   user_data: UserJWTData = Depends(allowed_client)):
-    try:
-        file_path: str = await prepare_to_download_export_file(task_id=task_id)
-    except ExportTaskNotFoundError:
+    task_result = AsyncResult(task_id, app=celery_app)
+    if task_result.state != "SUCCESS":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Export file not found or expired')
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+
+    result_data = task_result.result or {}
+    file_path = result_data.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Export file not found or expired')
 
     return FileResponse(
         path=file_path,
