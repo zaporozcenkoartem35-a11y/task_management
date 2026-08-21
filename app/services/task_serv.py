@@ -7,10 +7,14 @@ from fastapi import UploadFile
 from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.crud.com_crud import get_comments_by_task_id_from_db
 from app.crud.task_crud import add_task_in_db, auto_cancel_overdue_tasks_in_db, bulk_create_tasks_in_db, change_task_status_in_db, check_assignee_tasks_count_in_db, delete_task_from_db, get_overdue_tasks_from_db, get_stats_from_db, get_task_from_db, get_tasks_from_db, update_task_in_db
+from app.crud.user_crud import get_system_user_id
 from app.models.task_mod import CommentTable, TaskPriority, TaskStatus, TaskTable
-from app.schemas.comment_pydan import CommentResponse
+from app.schemas.comment_pydan import CommentCreateModel, CommentResponse
 from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.com_serv import prepare_to_add_comment
+from app.services.quote_serv import fetch_random_quote
 
 
 ALLOWED_TRANSITIONS = {
@@ -83,6 +87,20 @@ async def prepare_to_change_task_status(task_id: int,
                                                   session=session)
     if not new_cur_task:
         raise TaskNotFoundError
+
+    if new_status == TaskStatus.DONE:
+        try:
+            quote_text = await fetch_random_quote()
+            system_id: int = await get_system_user_id(session=session)
+            cur_comment = await prepare_to_add_comment(task_id=new_cur_task.id,
+                                                    comment_data=CommentCreateModel(
+                                                        content=quote_text
+                                                        ),
+                                                    user_id=system_id,
+                                                    session=session
+                                                    )
+        except:
+            ...
 
     return TaskDBResponse.model_validate(new_cur_task)
 
