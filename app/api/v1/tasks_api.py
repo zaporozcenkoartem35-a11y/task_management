@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.exceptions import CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, TaskNotFoundError, TooManyTasksError
+from app.core.exceptions import CSVEmptyError, CSVInvalidFormatError, CannotChangeAssigneeInReviewError, CannotCompleteOverdueError, CannotCompleteWithoutAssigneeError, CannotDeleteActiveTaskError, CannotEditCompletedTaskError, IncorrectDeadlineError, InvalidStatusTransitionError, NotCSVError, TaskNotFoundError, TooManyTasksError
 from app.models.task_mod import TaskStatus
 from app.schemas.task_pydan import TaskCreateModel, TaskDBResponse, TaskDetailResponse, TaskFilter, TaskStatsResponse, TaskUpdateModel
 from app.schemas.user_pydan import UserJWTData
 from app.api.deps import allowed_client, get_session
-from app.services.task_serv import prepare_to_add_task, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_overdue_tasks, prepare_to_get_tasks
+from app.services.task_serv import prepare_to_add_task, prepare_to_bulk_import, prepare_to_change_task, prepare_to_change_task_status, prepare_to_delete_task, prepare_to_get_cur_task, prepare_to_get_overdue_tasks, prepare_to_get_stats, prepare_to_get_tasks
 
 router= APIRouter()
 
@@ -69,6 +69,30 @@ async def get_stats(user_data: UserJWTData = Depends(allowed_client),
         pass
 
     return cur_stats
+
+
+@router.post('/tasks/bulk-import', status_code=status.HTTP_201_CREATED)
+async def add_bulk_import(file_data: UploadFile = File(...),
+                          user_data: UserJWTData = Depends(allowed_client),
+                          session: AsyncSession = Depends(get_session)):
+    try:
+        created_count = await prepare_to_bulk_import(file_data=file_data,
+                                     user_id=user_data.id,
+                                     session=session)
+    except NotCSVError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Only .csv files are allowed')
+    except CSVInvalidFormatError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid CSV format or missing fields')
+    except CSVEmptyError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='CSV file contains no valid tasks')
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
+
+    return {
+        "status": "success",
+        "imported_count": created_count
+    }
 
 
 @router.get('/tasks/{task_id}', response_model=TaskDetailResponse)
@@ -159,3 +183,6 @@ async def delete_task(task_id: int,
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Internal server error')
 
     return {'status': 'success'}
+
+
+
