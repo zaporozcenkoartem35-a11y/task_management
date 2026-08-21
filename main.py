@@ -4,22 +4,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import routers_api
-from app.core.background import periodic_overdue_checker
 from app.core.middlewares import logger_middleware
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    background_task = asyncio.create_task(periodic_overdue_checker())
-    yield
-    background_task.cancel()
-    try:
-        await background_task
-    except asyncio.CancelledError:
-        pass
 
 
-app = FastAPI(title="Task Management API", lifespan=lifespan)
+
+app = FastAPI(title="Task Management API")
 
 app.add_middleware(
     CORSMiddleware,

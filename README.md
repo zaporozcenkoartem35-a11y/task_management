@@ -1,12 +1,13 @@
 # Task Management API
 
-Production-ready REST API for task management, asynchronous processing, and analytics built with FastAPI, PostgreSQL, and Redis.
+Production-ready REST API for task management, asynchronous processing, and analytics built with FastAPI, PostgreSQL, Redis, and Celery.
 
 ## Tech Stack
 
 - **FastAPI** (Python 3.13)
 - **PostgreSQL 16** + **SQLAlchemy 2.0 (asyncpg)**
-- **Redis 7** (Rate Limiting & Async Job Queue)
+- **Redis 7** (Message Broker & Result Backend)
+- **Celery 5 & Celery Beat** (Distributed Task Queue & Periodic Job Scheduler)
 - **Alembic** (Database Migrations)
 - **Pydantic v2** & **Pydantic-Settings**
 - **JWT Auth** (Role-based access, Argon2 password hashing)
@@ -16,7 +17,7 @@ Production-ready REST API for task management, asynchronous processing, and anal
 
 ## Quick Start (Docker)
 
-Start the entire application, PostgreSQL, and Redis with migrations applied automatically:
+Start the entire stack (FastAPI app, PostgreSQL, Redis, Celery Worker, Celery Beat) with automatic database migrations:
 
 ```bash
 docker compose up --build
@@ -35,7 +36,12 @@ docker compose up --build
    ```bash
    alembic upgrade head
    ```
-3. **Run dev server:**
+3. **Run Celery Worker and Beat:**
+   ```bash
+   celery -A app.core.celery_app.celery_app worker --loglevel=info
+   celery -A app.core.celery_app.celery_app beat --loglevel=info
+   ```
+4. **Run dev server:**
    ```bash
    uvicorn main:app --reload
    ```
@@ -46,13 +52,14 @@ docker compose up --build
 pytest -v
 ```
 
-## Core Features (Round 1 & Round 2)
+## Core Features
 
 - **Task Lifecycle & State Machine:** Strict status transitions (`Backlog` → `In Progress` → `Review` → `Done` / `Cancelled`) with validation rules.
+- **Celery Distributed Task Queue:** Asynchronous CSV export offloaded to Celery workers via Redis broker (`POST /tasks/export` [202 Accepted] → `GET /tasks/export/{task_id}` [Polling status] → `GET /tasks/export/{task_id}/download` [Streamed CSV FileResponse]).
+- **Celery Beat Periodic Scheduler:** Automated periodic job executing every minute to detect and cancel overdue tasks without web-server blocking loops.
 - **Performance Logging Middleware:** Real-time request duration tracking. Logs warning to `app.log` for requests exceeding 500ms.
 - **Bulk CSV Import:** High-performance batch creation of tasks from CSV using SQLAlchemy Core Bulk Insert (`POST /api/v1/tasks/bulk-import`).
 - **Redis Rate Limiter:** Protects comment submissions (`POST /api/v1/tasks/{id}/comments`) with atomic Redis counters (max 5 comments/min → `429 Too Many Requests`).
 - **ZenQuotes API Integration:** Asynchronous (`httpx.AsyncClient`) fetching of motivational quotes automatically posted by `System` upon task completion.
-- **Task Queue & Async CSV Export:** Long-running task export using Redis shared state (`POST /tasks/export` [202 Accepted] → `GET /tasks/export/{task_id}` [Polling status] → `GET /tasks/export/{task_id}/download` [Streamed CSV FileResponse]).
 - **Search, Filters & Custom Sorting:** Full-text search (`ILIKE`), composite filters, and priority-deadline ordering.
-- **Analytics & Background Automation:** `/tasks/overdue`, `/tasks/stats`, and automated periodic cancellation of overdue tasks.
+- **Analytics:** `/tasks/overdue` and `/tasks/stats` endpoints.
